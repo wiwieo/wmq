@@ -1,0 +1,162 @@
+package server
+
+import (
+	"bufio"
+	"encoding/json"
+	"fmt"
+	"net"
+	"os"
+	"sync"
+	"wmq/constant"
+	es "wmq/entity/server"
+	"wmq/logger"
+)
+
+type connInfo struct {
+	conn net.Conn
+	tpe  int
+}
+
+var sub_conn_pool sync.Map
+
+func get(quene string) []connInfo {
+	v, ok := sub_conn_pool.Load(quene)
+	if !ok {
+		return nil
+	}
+	conns, ok := v.([]connInfo)
+	if !ok {
+		return nil
+	}
+	return conns
+}
+
+func del(quene string, idx int) {
+	if conns := get(quene); len(conns) > 0 {
+		var temps []connInfo
+		temps = append(temps, conns[:idx]...)
+		if idx < len(conns) {
+			temps = append(temps, conns[idx+1:]...)
+		}
+		sub_conn_pool.Store(quene, temps)
+	}
+}
+
+func store(quene string, tpe int, conn net.Conn) {
+	// 回复的连接不需要添加（使用推送时的通道）
+	if tpe == constant.MSG_TYPE_REPLY {
+		return
+	}
+
+	var infos []connInfo
+	if v, ok := sub_conn_pool.Load(quene); ok {
+		infos, ok = v.([]connInfo)
+		if !ok {
+			return
+		}
+	}
+
+	// 某些情况下不连接不需要缓存
+	for idx, info := range infos {
+		// 已经存在相同的连接则替换成最新的
+		// 注：为了能在一台机器上测试多个监听，此处将监听的连接放开
+		if info.tpe == tpe && tpe != constant.MSG_TYPE_SUB{
+			infos[idx].conn = conn
+			return
+		}
+	}
+
+	c := connInfo{
+		conn: conn,
+		tpe:  tpe,
+	}
+	infos = append(infos, c)
+	sub_conn_pool.Store(quene, infos)
+}
+
+type server struct {
+	conn      net.Conn
+	queneName string // 队列名称
+	log       *logger.Logger
+}
+
+func StartTCP(port string) {
+	log := logger.NewStdLogger(true, true, true, true, true)
+	addr, _ := net.ResolveTCPAddr("tcp", fmt.Sprintf(":%s", port))
+	l, err := net.ListenTCP("tcp", addr)
+	if err != nil {
+		log.Trace("%s", err)
+		os.Exit(-1)
+	}
+	for {
+		conn, err := l.Accept()
+		if err != nil {
+			log.Trace("%s", err)
+			continue
+		}
+		s := &server{
+			conn: conn,
+			log:  log,
+		}
+		go s.handle()
+	}
+}
+
+func (s *server) handle() {
+	r := bufio.NewReader(s.conn)
+	for {
+		content, err := r.ReadString(constant.END_SIGN)
+		if err != nil {
+			s.log.Error("读取数据失败：%s", err)
+			s.conn.Close()
+			break
+		}
+		s.log.Trace("服务端收到的数据：%s", content)
+		if len(content) == 0 {
+			continue
+		}
+		var msgInfo es.MsgInfo
+		err = json.Unmarshal([]byte(content), &msgInfo)
+		if err != nil {
+			s.log.Error("消息格式错误，请确认：%s", err)
+			continue
+		}
+		// TODO 先持久化
+
+		// 保存客户端的连接
+		go store(msgInfo.MsgQuene, msgInfo.MsgType, s.conn)
+
+		if msgInfo.MsgType != constant.MSG_TYPE_SUB {
+			// 推送
+			go s.push(content, &msgInfo)
+		}
+	}
+}
+
+// 将消息推送给各个监听的客户端
+func (s *server) push(content string, msgInfo *es.MsgInfo) {
+	infos := get(msgInfo.MsgQuene)
+	for idx, info := range infos {
+		// 如果是回复消息，则不发给监听者，只发给推送者
+		if msgInfo.MsgType == constant.MSG_TYPE_REPLY {
+			if info.tpe == constant.MSG_TYPE_SUB {
+				continue
+			}
+		}
+		// 只推送给监听者
+		if msgInfo.MsgType == constant.MSG_TYPE_PUB {
+			if info.tpe == constant.MSG_TYPE_PUB {
+				continue
+			}
+		}
+		s.log.Trace("开始推送消息：%+v", msgInfo)
+		_, err := info.conn.Write([]byte(content))
+		if err != nil {
+			s.log.Error("推送消息给客户端失败。[conn:%v], [err:%s]", info.conn, err)
+			del(msgInfo.MsgQuene, idx)
+		}
+	}
+}
+
+func (s *server) response() {
+}
