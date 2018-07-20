@@ -13,28 +13,30 @@ import (
 )
 
 type pub struct {
-	Host     string
-	Port     string
-	Queen    string
-	conn     net.Conn
-	log      *logger.Logger
-	callBack func([]byte)
-	closec   chan bool
-	timeoutc chan int
+	Host        string
+	Port        string
+	Queen       string
+	conn        net.Conn
+	log         *logger.Logger
+	callBack    func([]byte)
+	closec      chan bool
+	timeoutc    chan int
+	isWaitReply bool
 }
 
-func (c *Client) Publish(host, port, queen string, content interface{}, callback func([]byte)) {
+func (c *Client) Publish(host, port, queen string, content interface{}, isWaitReply bool, callback func([]byte)) {
 	c.mux.Lock()
 	for c.pub.conn == nil {
 		c.tpe = constant.MSG_TYPE_PUB
 		c.pub = pub{
-			Host:     host,
-			Port:     port,
-			Queen:    queen,
-			callBack: callback,
-			log:      logger.NewStdLogger(true, true, true, true, true),
-			closec:   make(chan bool),
-			timeoutc: make(chan int),
+			Host:        host,
+			Port:        port,
+			Queen:       queen,
+			callBack:    callback,
+			log:         logger.NewStdLogger(true, true, true, true, true),
+			closec:      make(chan bool),
+			timeoutc:    make(chan int),
+			isWaitReply: isWaitReply,
 		}
 		c.listenForTCP()
 	}

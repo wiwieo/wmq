@@ -59,7 +59,9 @@ func (c *Client) listenForTCP() {
 		}
 		if c.tpe == constant.MSG_TYPE_PUB {
 			go c.pub.timeout()
-			go c.pub.waitReply()
+			if c.pub.isWaitReply {
+				go c.pub.waitReply()
+			}
 		}
 		store(fmt.Sprintf("%s:%d", addr, c.tpe), conn)
 	}

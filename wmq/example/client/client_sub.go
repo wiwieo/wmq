@@ -7,12 +7,13 @@ import (
 )
 
 func main() {
-	client.Subscript("localhost", "44444", "wmq_test", callback)
+	client.Subscript("localhost", "44444", "wmq_test", false, callback)
 }
 
 func callback(data []byte) []byte{
 	var p Param
 	json.Unmarshal(data, &p)
+	fmt.Println("处理业务逻辑。。。。", p)
 	return []byte(fmt.Sprintf("%d", p.Id+1))
 }
 

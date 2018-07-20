@@ -17,9 +17,10 @@ type sub struct {
 	conn     net.Conn
 	log      *logger.Logger
 	callBack func([]byte) []byte
+	isReply  bool
 }
 
-func Subscript(host, port, queen string, callback func([]byte) []byte) {
+func Subscript(host, port, queen string, isReply bool, callback func([]byte) []byte) {
 	c := Client{
 		tpe: constant.MSG_TYPE_SUB,
 	}
@@ -28,6 +29,7 @@ func Subscript(host, port, queen string, callback func([]byte) []byte) {
 		Port:     port,
 		Queen:    queen,
 		callBack: callback,
+		isReply:  isReply,
 		log:      logger.NewStdLogger(true, true, true, true, true),
 	}
 
@@ -46,7 +48,7 @@ func (c *sub) read() {
 	read := bufio.NewReader(c.conn)
 	for {
 		content, err := read.ReadString(constant.END_SIGN)
-		c.log.Trace("监听到的内容为：%s, %d", content, len(content))
+		c.log.Trace("监听到的内容为：%s, 长度为：%d", content, len(content))
 		if err != nil {
 			c.log.Error("读取监听消息内容错误：%s", err)
 			c.conn.Close()
@@ -66,13 +68,19 @@ func (c *sub) exec(content string) {
 		c.log.Error("读取监听消息内容格式错误：%s，%v", err, content)
 		return
 	}
-	if msg.MsgType != constant.MSG_TYPE_PUB{
+	if msg.MsgType != constant.MSG_TYPE_PUB {
 		return
 	}
 	data, _ := json.Marshal(msg.MsgContent)
 	rtn := c.callBack(data)
-	msg.MsgContent = string(rtn)
-	msg.MsgType = constant.MSG_TYPE_REPLY
-	data, _ = json.Marshal(msg)
-	c.conn.Write(append(data, []byte("\n")...))
+	if c.isReply {
+		msg.MsgContent = string(rtn)
+		msg.MsgType = constant.MSG_TYPE_REPLY
+		data, _ = json.Marshal(msg)
+		_, err = c.conn.Write(append(data, []byte("\n")...))
+		if err != nil {
+			c.log.Error("回复消息失败：%s，%v", err, content)
+			return
+		}
+	}
 }
